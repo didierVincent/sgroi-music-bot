@@ -93,7 +93,8 @@ async function checkAndNotify() {
         const daysSinceLastAudio = (now - lastAudio) / (1000 * 60 * 60 * 24);
         const daysLeft = TARGET_DAYS - daysSinceLastAudio;
 
-        const threshold = NOTIFY_THRESHOLDS.find((t) => daysLeft <= t);
+        // ✅ Fixed threshold logic
+        const threshold = [...NOTIFY_THRESHOLDS].reverse().find((t) => daysLeft <= t);
         if (threshold === undefined || data.lastNotifiedThreshold === threshold) continue;
 
         try {
@@ -244,7 +245,9 @@ client.on('messageCreate', async (message) => {
             const lastAudio = data.lastAudio || 0;
             const daysSinceLastAudio = (now - lastAudio) / (1000 * 60 * 60 * 24);
             const daysLeft = TARGET_DAYS - daysSinceLastAudio;
-            const threshold = NOTIFY_THRESHOLDS.find((t) => daysLeft <= t);
+
+            // ✅ Fixed threshold logic
+            const threshold = [...NOTIFY_THRESHOLDS].reverse().find((t) => daysLeft <= t);
             if (threshold === undefined) continue;
 
             const guild = await client.guilds.fetch(guildId).catch(() => null);
