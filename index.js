@@ -130,7 +130,7 @@ async function checkAndNotify() {
   }
 }
 
-// --- Owner commands with dry run ---
+// --- Owner commands with dry run + resetdata ---
 client.on('messageCreate', async (message) => {
   if (!message.guild) return; // commands only in guilds
   if (!message.content.startsWith('!')) return;
@@ -138,6 +138,7 @@ client.on('messageCreate', async (message) => {
   const args = message.content.slice(1).split(/\s+/);
   const cmd = args[0].toLowerCase();
 
+  // Anyone can use !check
   if (cmd === 'check') {
     const now = Date.now();
     let output = '🚨 Days left for the gang 🚨\n';
@@ -167,7 +168,7 @@ client.on('messageCreate', async (message) => {
     const chunks = output.match(/[\s\S]{1,2000}/g);
     for (const chunk of chunks) message.channel.send('```' + chunk + '```');
 
-  } else if (cmd === 'seed' || cmd === 'export') {
+  } else if (['seed', 'export', 'resetdata'].includes(cmd)) {
     if (message.author.id !== OWNER_ID) {
       return message.reply('⚠️ You are not authorized to use this command.');
     }
@@ -203,6 +204,12 @@ client.on('messageCreate', async (message) => {
 
       saveData();
       message.reply(`✅ Seeded data from the last ${limit} messages.`);
+    }
+
+    if (cmd === 'resetdata') {
+      userAudioData = {};
+      saveData();
+      message.reply('✅ All user audio data cleared.');
     }
   }
 });
