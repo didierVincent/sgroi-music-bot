@@ -45,6 +45,13 @@ const MESSAGES = {
   0: process.env.NOTIFY_OVERDUE || "🚨🚨🚨 {user}!!!!! It's been over a month of no music! 😳😳😳"
 };
 
+// --- Helpers ---
+function isAudioAttachment(att) {
+  const name = att.name || '';
+  const ct = att.contentType || '';
+  return audioExtRe.test(name) || (ct && ct.startsWith('audio'));
+}
+
 // --- Audio detection ---
 client.on('messageCreate', (message) => {
   if (message.author.bot || !message.guild) return;
@@ -58,9 +65,7 @@ client.on('messageCreate', (message) => {
 
   let foundAudio = false;
   for (const attachment of message.attachments.values()) {
-    const name = attachment.name || '';
-    const contentType = attachment.contentType || '';
-    if (audioExtRe.test(name) || (contentType && contentType.startsWith('audio'))) {
+    if (isAudioAttachment(attachment)) {
       foundAudio = true;
       break;
     }
@@ -130,15 +135,15 @@ async function checkAndNotify() {
   }
 }
 
-// --- Owner commands with dry run + resetdata ---
+// --- Commands ---
 client.on('messageCreate', async (message) => {
-  if (!message.guild) return; // commands only in guilds
+  if (!message.guild) return;
   if (!message.content.startsWith('!')) return;
 
   const args = message.content.slice(1).split(/\s+/);
   const cmd = args[0].toLowerCase();
 
-  // Anyone can use !check
+  // --- !check (anyone) ---
   if (cmd === 'check') {
     const now = Date.now();
     let output = '🚨 Days left for the gang 🚨\n';
@@ -167,12 +172,15 @@ client.on('messageCreate', async (message) => {
 
     const chunks = output.match(/[\s\S]{1,2000}/g);
     for (const chunk of chunks) message.channel.send('```' + chunk + '```');
+  }
 
-  } else if (['seed', 'export', 'resetdata'].includes(cmd)) {
+  // --- Owner-only commands ---
+  else if (['seed', 'export', 'resetdata'].includes(cmd)) {
     if (message.author.id !== OWNER_ID) {
       return message.reply('⚠️ You are not authorized to use this command.');
     }
 
+    // --- !export ---
     if (cmd === 'export') {
       try {
         await message.reply({ files: [{ attachment: DATA_FILE, name: 'audioData.json' }] });
@@ -181,35 +189,48 @@ client.on('messageCreate', async (message) => {
       }
     }
 
+    // --- !seed ---
     if (cmd === 'seed') {
-      const limit = parseInt(args[1] || '100', 10);
-      const fetched = await message.channel.messages.fetch({ limit });
+      const limit = Math.min(parseInt(args[1] || '500', 10), 1000); // default 500, max 1000
+      let fetchedMessages = [];
+      let lastId = null;
 
-      for (const msg of fetched.values()) {
+      while (fetchedMessages.length < limit) {
+        const options = { limit: Math.min(100, limit - fetchedMessages.length) };
+        if (lastId) options.before = lastId;
+
+        const batch = await message.channel.messages.fetch(options);
+        if (!batch.size) break;
+
+        fetchedMessages.push(...batch.values());
+        lastId = batch.last().id;
+      }
+
+      for (const msg of fetchedMessages) {
         if (msg.author?.bot || !msg.attachments.size) continue;
 
         for (const att of msg.attachments.values()) {
-          const name = att.name || '';
-          const ct = att.contentType || '';
-          if (audioExtRe.test(name) || (ct && ct.startsWith('audio'))) {
-            const gid = message.guild.id;
-            const cid = message.channel.id;
-            const uid = msg.author.id;
-            userAudioData[gid] ??= {};
-            userAudioData[gid][cid] ??= {};
-            userAudioData[gid][cid][uid] = { lastAudio: msg.createdTimestamp, lastNotifiedThreshold: null };
-          }
+          if (!isAudioAttachment(att)) continue;
+
+          const gid = message.guild.id;
+          const cid = message.channel.id;
+          const uid = msg.author.id;
+          userAudioData[gid] ??= {};
+          userAudioData[gid][cid] ??= {};
+          userAudioData[gid][cid][uid] = { lastAudio: msg.createdTimestamp, lastNotifiedThreshold: null };
         }
       }
 
       saveData();
-      message.reply(`✅ Seeded data from the last ${limit} messages.`);
+      message.reply(`✅ Seeded data from the last ${fetchedMessages.length} messages.`);
     }
 
+    // --- !resetdata ---
     if (cmd === 'resetdata') {
       userAudioData = {};
       saveData();
-      message.reply('✅ All user audio data cleared.');
+      message.reply('✅ All audio data has been reset.');
+      console.log('🔄 Audio data reset by owner.');
     }
   }
 });
