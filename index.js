@@ -6,6 +6,25 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 dotenv.config();
 
+// tiny HTTP server so Render web service sees an open port (keeps free web service happy)
+import http from 'http';
+
+const PORT = parseInt(process.env.PORT || '3000', 10);
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    return res.end('ok');
+  }
+  // optional: basic index page
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Discord bot running');
+});
+
+server.listen(PORT, () => {
+  console.log(`HTTP server listening on port ${PORT} (for Render health checks)`);
+});
+
+
 // --- Discord client setup ---
 const client = new Client({
   intents: [
