@@ -133,6 +133,7 @@ client.on('messageCreate', async (message) => {
   const args = message.content.slice(1).split(/\s+/);
   const cmd = args[0].toLowerCase();
 
+  // --- !check ---
   if (cmd === 'check') {
     const now = Date.now();
     let output = '🚨 Days left for the gang 🚨\n';
@@ -161,7 +162,8 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  else if (['seed', 'export', 'resetdata'].includes(cmd)) {
+  // --- Owner-only commands ---
+  else if (['seed', 'export', 'resetdata', 'testping'].includes(cmd)) {
     if (message.author.id !== OWNER_ID) return message.reply('⚠️ You are not authorized.');
 
     // --- !export ---
@@ -206,7 +208,6 @@ client.on('messageCreate', async (message) => {
         if (totalFetched >= maxFetch) break;
       }
 
-      // --- Write results ---
       const gid = message.guild.id;
       const cid = message.channel.id;
       userAudioData[gid] ??= {};
@@ -229,6 +230,53 @@ client.on('messageCreate', async (message) => {
       saveData();
       message.reply('✅ Audio data reset.');
       console.log('🔄 Audio data reset by owner.');
+    }
+
+    // --- 🧪 !testping ---
+    if (cmd === 'testping') {
+      await message.channel.send('🧪 Running test notification simulation...');
+      const now = Date.now();
+      let testResults = [];
+
+      for (const [guildId, channels] of Object.entries(userAudioData)) {
+        for (const [channelId, users] of Object.entries(channels)) {
+          for (const [userId, data] of Object.entries(users)) {
+            const lastAudio = data.lastAudio || 0;
+            const daysSinceLastAudio = (now - lastAudio) / (1000 * 60 * 60 * 24);
+            const daysLeft = TARGET_DAYS - daysSinceLastAudio;
+            const threshold = NOTIFY_THRESHOLDS.find((t) => daysLeft <= t);
+            if (threshold === undefined) continue;
+
+            const guild = await client.guilds.fetch(guildId).catch(() => null);
+            const member = guild ? await guild.members.fetch(userId).catch(() => null) : null;
+            if (!member) continue;
+
+            const dueDateStr = new Date(lastAudio + TARGET_DAYS * 24 * 60 * 60 * 1000).toLocaleDateString(
+              'en-AU',
+              { weekday: 'short', day: 'numeric', month: 'short' }
+            );
+
+            const msgText = `🧪 TEST PING (${threshold}-day threshold)\n${MESSAGES[threshold]
+              .replace('{user}', member.toString())
+              .replace('{duedate}', dueDateStr)}`;
+
+            testResults.push(`• ${member.user.tag} → ${daysLeft.toFixed(1)} days left (${threshold}-day trigger)`);
+
+            try {
+              await message.channel.send(msgText);
+            } catch (err) {
+              console.error('Error sending test ping:', err);
+            }
+          }
+        }
+      }
+
+      if (testResults.length === 0) {
+        await message.channel.send('✅ No users matched any test notification thresholds.');
+      } else {
+        const summary = testResults.join('\n');
+        await message.channel.send(`📋 **Test Results Summary:**\n${summary}`);
+      }
     }
   }
 });
