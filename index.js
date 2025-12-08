@@ -42,13 +42,12 @@ function saveData() {
 const TARGET_DAYS = parseInt(process.env.TARGET_DAYS || '30', 10);
 const NOTIFY_THRESHOLDS = [7, 3, 1, 0];
 const CHECK_INTERVAL_MINUTES = parseInt(process.env.CHECK_INTERVAL_MINUTES || '60', 10);
-const OWNER_ID = process.env.OWNER_ID;
 const audioExtRe = /\.(mp3|wav|m4a|flac|ogg|aac|opus)$/i;
 
 // --- Messages per threshold ---
 const MESSAGES = {
-  7: process.env.NOTIFY_7DAYS || "🤠 {user} you have 7 days left to post a track! 💣 {duedate}",
-  3: process.env.NOTIFY_3DAYS || "{user}! ⚠️ 3 days left! Don't forget to post music! 🥺",
+  7: process.env.NOTIFY_7DAYS || "{user} you have 7 days or less left to post a track! 💣 {duedate}",
+  3: process.env.NOTIFY_3DAYS || "{user}! ⚠️ Few days left! Post music! 🥺 {duedate}",
   1: process.env.NOTIFY_1DAY || "😱 {user}!!! 1 day left to post music! QUICK send something 🙏",
   0: process.env.NOTIFY_OVERDUE || "🚨🚨🚨 {user}!!!!! It's been over a month of no music! 😳😳😳",
 };
@@ -93,7 +92,6 @@ async function checkAndNotify() {
         const daysSinceLastAudio = (now - lastAudio) / (1000 * 60 * 60 * 24);
         const daysLeft = TARGET_DAYS - daysSinceLastAudio;
 
-        // ✅ Fixed threshold logic
         const threshold = [...NOTIFY_THRESHOLDS].reverse().find((t) => daysLeft <= t);
         if (threshold === undefined || data.lastNotifiedThreshold === threshold) continue;
 
@@ -102,7 +100,7 @@ async function checkAndNotify() {
           const member = guild ? await guild.members.fetch(userId).catch(() => null) : null;
           if (!member) continue;
 
-          const dueDateStr = new Date(lastAudio + TARGET_DAYS * 24 * 60 * 60 * 1000).toLocaleDateString(
+          const dueDateStr = new Date(lastAudio + TARGET_DAYS * 86400000).toLocaleDateString(
             'en-AU',
             { weekday: 'short', day: 'numeric', month: 'short' }
           );
@@ -134,39 +132,91 @@ client.on('messageCreate', async (message) => {
   const args = message.content.slice(1).split(/\s+/);
   const cmd = args[0].toLowerCase();
 
-  // --- !check ---
-  if (cmd === 'check') {
-    const now = Date.now();
-    let output = '🚨 Days left for the gang 🚨\n';
+  async function runSeedOnChannel(channel, maxFetch = 300) {
+  let lastId = null;
+  let totalFetched = 0;
+  const userLatest = new Map();
 
-    for (const [guildId, channels] of Object.entries(userAudioData)) {
-      const guild = await client.guilds.fetch(guildId).catch(() => null);
-      if (!guild) continue;
+  while (true) {
+    const opts = { limit: 100 };
+    if (lastId) opts.before = lastId;
 
-      for (const [channelId, users] of Object.entries(channels)) {
-        for (const [userId, data] of Object.entries(users)) {
-          const member = await guild.members.fetch(userId).catch(() => null);
-          if (!member) continue;
+    const messages = await channel.messages.fetch(opts);
+    if (!messages.size) break;
 
-          const daysLeft = Math.round(TARGET_DAYS - (now - (data.lastAudio || 0)) / (1000 * 60 * 60 * 24));
-          const dueDateStr = new Date(data.lastAudio + TARGET_DAYS * 24 * 60 * 60 * 1000).toLocaleDateString(
-            'en-AU',
-            { weekday: 'short', day: 'numeric', month: 'short' }
-          );
-          output += `${member.nickname || member.user.username}: ${daysLeft} days left (due ${dueDateStr})\n`;
-        }
+    totalFetched += messages.size;
+
+    for (const [, msg] of messages) {
+      if (msg.author.bot || !msg.attachments.size) continue;
+      const hasAudio = [...msg.attachments.values()].some(isAudioAttachment);
+      if (!hasAudio) continue;
+
+      const uid = msg.author.id;
+      if (!userLatest.has(uid) || msg.createdTimestamp > userLatest.get(uid).created) {
+        userLatest.set(uid, { created: msg.createdTimestamp });
       }
     }
 
-    for (const chunk of output.match(/[\s\S]{1,2000}/g) || []) {
-      message.channel.send('```' + chunk + '```');
+    lastId = messages.last().id;
+    if (totalFetched >= maxFetch) break;
+  }
+
+  // Write results
+  const gid = channel.guild.id;
+  const cid = channel.id;
+  userAudioData[gid] ??= {};
+  userAudioData[gid][cid] ??= {};
+
+  for (const [uid, info] of userLatest.entries()) {
+    userAudioData[gid][cid][uid] = {
+      lastAudio: info.created,
+      lastNotifiedThreshold: userAudioData[gid][cid][uid]?.lastNotifiedThreshold ?? null,
+    };
+  }
+
+  saveData();
+  return { fetchedUsers: userLatest.size, totalFetched };
+}
+
+
+  // --- !check ---
+  if (cmd === 'check') {
+  // 1. AUTO-SEED this channel before checking
+  await message.channel.send("🔄 Updating recent audio posts...");
+  const result = await runSeedOnChannel(message.channel, 300);
+  await message.channel.send(`✅ Updated ${result.fetchedUsers} users from ${result.totalFetched} messages.`);
+
+  // 2. Now continue with your existing check output
+  const now = Date.now();
+  let output = '🚨 Days left for the gang 🚨\n';
+
+  for (const [guildId, channels] of Object.entries(userAudioData)) {
+    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    if (!guild) continue;
+
+    for (const [channelId, users] of Object.entries(channels)) {
+      for (const [userId, data] of Object.entries(users)) {
+        const member = await guild.members.fetch(userId).catch(() => null);
+        if (!member) continue;
+
+        const daysLeft = Math.round(TARGET_DAYS - (now - (data.lastAudio || 0)) / 86400000);
+        const dueDateStr = new Date(data.lastAudio + TARGET_DAYS * 86400000).toLocaleDateString(
+          'en-AU',
+          { weekday: 'short', day: 'numeric', month: 'short' }
+        );
+        output += `${member.nickname || member.user.username}: ${daysLeft} days left (due ${dueDateStr})\n`;
+      }
     }
   }
 
-  // --- Owner-only commands ---
-  else if (['seed', 'export', 'resetdata', 'testping'].includes(cmd)) {
-    if (message.author.id !== OWNER_ID) return message.reply('⚠️ You are not authorized.');
+  for (const chunk of output.match(/[\s\S]{1,2000}/g) || []) {
+    message.channel.send('```' + chunk + '```');
+  }
+}
 
+
+  // --- Everyone can now use: seed, export, resetdata, testping ---
+  if (['seed', 'export', 'resetdata', 'testping'].includes(cmd)) {
     // --- !export ---
     if (cmd === 'export') {
       try {
@@ -178,59 +228,20 @@ client.on('messageCreate', async (message) => {
 
     // --- !seed ---
     if (cmd === 'seed') {
-      const maxFetch = parseInt(args[1] || '2000', 10);
-      let lastId = null;
-      let totalFetched = 0;
-      const userLatest = new Map();
+  const maxFetch = parseInt(args[1] || '2000', 10);
+  message.reply(`🔍 Seeding up to ${maxFetch} messages...`);
 
-      message.reply(`🔍 Seeding up to ${maxFetch} messages... This may take a minute.`);
+  const result = await runSeedOnChannel(message.channel, maxFetch);
 
-      while (true) {
-        const opts = { limit: 100 };
-        if (lastId) opts.before = lastId;
-
-        const messages = await message.channel.messages.fetch(opts);
-        if (!messages.size) break;
-
-        totalFetched += messages.size;
-
-        for (const [, msg] of messages) {
-          if (msg.author.bot || !msg.attachments.size) continue;
-          const hasAudio = [...msg.attachments.values()].some(isAudioAttachment);
-          if (!hasAudio) continue;
-
-          const uid = msg.author.id;
-          if (!userLatest.has(uid) || msg.createdTimestamp > userLatest.get(uid).created) {
-            userLatest.set(uid, { created: msg.createdTimestamp, msg });
-          }
-        }
-
-        lastId = messages.last().id;
-        if (totalFetched >= maxFetch) break;
-      }
-
-      const gid = message.guild.id;
-      const cid = message.channel.id;
-      userAudioData[gid] ??= {};
-      userAudioData[gid][cid] ??= {};
-
-      for (const [uid, info] of userLatest.entries()) {
-        userAudioData[gid][cid][uid] = {
-          lastAudio: info.created,
-          lastNotifiedThreshold: null,
-        };
-      }
-
-      saveData();
-      message.reply(`✅ Seeded ${userLatest.size} users from ${totalFetched} messages.`);
-    }
+  message.reply(`✅ Seeded ${result.fetchedUsers} users from ${result.totalFetched} messages.`);
+}
 
     // --- !resetdata ---
     if (cmd === 'resetdata') {
       userAudioData = {};
       saveData();
       message.reply('✅ Audio data reset.');
-      console.log('🔄 Audio data reset by owner.');
+      console.log('🔄 Audio data reset.');
     }
 
     // --- 🧪 !testping ---
@@ -243,10 +254,9 @@ client.on('messageCreate', async (message) => {
         for (const [channelId, users] of Object.entries(channels)) {
           for (const [userId, data] of Object.entries(users)) {
             const lastAudio = data.lastAudio || 0;
-            const daysSinceLastAudio = (now - lastAudio) / (1000 * 60 * 60 * 24);
+            const daysSinceLastAudio = (now - lastAudio) / 86400000;
             const daysLeft = TARGET_DAYS - daysSinceLastAudio;
 
-            // ✅ Fixed threshold logic
             const threshold = [...NOTIFY_THRESHOLDS].reverse().find((t) => daysLeft <= t);
             if (threshold === undefined) continue;
 
@@ -254,7 +264,7 @@ client.on('messageCreate', async (message) => {
             const member = guild ? await guild.members.fetch(userId).catch(() => null) : null;
             if (!member) continue;
 
-            const dueDateStr = new Date(lastAudio + TARGET_DAYS * 24 * 60 * 60 * 1000).toLocaleDateString(
+            const dueDateStr = new Date(lastAudio + TARGET_DAYS * 86400000).toLocaleDateString(
               'en-AU',
               { weekday: 'short', day: 'numeric', month: 'short' }
             );
