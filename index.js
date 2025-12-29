@@ -180,16 +180,17 @@ client.on('messageCreate', async (message) => {
 
 
   // --- !check ---
-  if (cmd === 'check') {
+  // --- !check ---
+if (cmd === 'check') {
   // 1. AUTO-SEED this channel before checking
   await message.channel.send("🔄 Updating recent audio posts...");
   const result = await runSeedOnChannel(message.channel, 300);
   await message.channel.send(`✅ Updated ${result.fetchedUsers} users from ${result.totalFetched} messages.`);
 
-  // 2. Now continue with your existing check output
   const now = Date.now();
-  let output = '🚨 Days left for the gang 🚨\n';
+  const rows = [];
 
+  // Collect rows first
   for (const [guildId, channels] of Object.entries(userAudioData)) {
     const guild = await client.guilds.fetch(guildId).catch(() => null);
     if (!guild) continue;
@@ -199,20 +200,40 @@ client.on('messageCreate', async (message) => {
         const member = await guild.members.fetch(userId).catch(() => null);
         if (!member) continue;
 
-        const daysLeft = Math.round(TARGET_DAYS - (now - (data.lastAudio || 0)) / 86400000);
-        const dueDateStr = new Date(data.lastAudio + TARGET_DAYS * 86400000).toLocaleDateString(
-          'en-AU',
-          { weekday: 'short', day: 'numeric', month: 'short' }
+        const daysLeft = Math.round(
+          TARGET_DAYS - (now - (data.lastAudio || 0)) / 86400000
         );
-        output += `${member.nickname || member.user.username}: ${daysLeft} days left (due ${dueDateStr})\n`;
+
+        const dueDateStr = new Date(
+          data.lastAudio + TARGET_DAYS * 86400000
+        ).toLocaleDateString('en-AU', {
+          weekday: 'short',
+          day: 'numeric',
+          month: 'short',
+        });
+
+        rows.push({
+          name: member.nickname || member.user.username,
+          daysLeft,
+          dueDateStr,
+        });
       }
     }
   }
 
+  // 🔽 SORT: most days left → least days left
+  rows.sort((a, b) => b.daysLeft - a.daysLeft);
+
+  let output = '🚨 Days left for the gang 🚨\n';
+  for (const r of rows) {
+    output += `${r.name}: ${r.daysLeft} days left (due ${r.dueDateStr})\n`;
+  }
+
   for (const chunk of output.match(/[\s\S]{1,2000}/g) || []) {
-    message.channel.send('```' + chunk + '```');
+    await message.channel.send('```' + chunk + '```');
   }
 }
+
 
 
   // --- Everyone can now use: seed, export, resetdata, testping ---
