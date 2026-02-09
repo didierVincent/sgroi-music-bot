@@ -1,5 +1,5 @@
-// audio_tracker_bot - Multi-stage Ping + DM + Dry Run Manual Check (JavaScript, ESM)
-// -----------------------------------------------------------------------------------
+// audio_tracker_bot - Fixed Version (JavaScript, ESM)
+// ---------------------------------------------------
 
 import { Client, GatewayIntentBits, Events } from 'discord.js';
 import fs from 'fs';
@@ -9,7 +9,7 @@ import http from 'http';
 dotenv.config();
 
 /* ------------------------------------------------------------------ */
-/* STARTUP SANITY LOG (DO NOT REMOVE – SAVES HOURS LATER)              */
+/* STARTUP SANITY LOG                                                  */
 /* ------------------------------------------------------------------ */
 console.log('🚀 Boot sequence start');
 console.log('🔍 ENV CHECK:', {
@@ -29,7 +29,7 @@ if (!process.env.BOT_TOKEN) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Render-safe HTTP server                                             */
+/* HTTP server (for uptime checks)                                     */
 /* ------------------------------------------------------------------ */
 const PORT = Number(process.env.PORT) || 10000;
 
@@ -49,7 +49,7 @@ let userAudioData = {};
 try {
   if (fs.existsSync(DATA_FILE)) {
     userAudioData = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8') || '{}');
-    console.log('💾 Loaded audioData.json');
+    console.log('💾 Loaded audioData.json:', JSON.stringify(userAudioData, null, 2));
   } else {
     console.log('💾 No data file found, starting fresh');
   }
@@ -67,7 +67,7 @@ function saveData() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Config                                                             */
+/* Config                                                              */
 /* ------------------------------------------------------------------ */
 const TARGET_DAYS = Number(process.env.TARGET_DAYS) || 30;
 const CHECK_INTERVAL_MINUTES = Number(process.env.CHECK_INTERVAL_MINUTES) || 60;
@@ -81,7 +81,7 @@ console.log('⚙️ Config loaded:', {
 });
 
 /* ------------------------------------------------------------------ */
-/* Messages                                                           */
+/* Messages                                                            */
 /* ------------------------------------------------------------------ */
 const MESSAGES = {
   7: process.env.NOTIFY_7DAYS || '{user} you have 7 days or less left to post a track! 💣 {duedate}',
@@ -91,7 +91,7 @@ const MESSAGES = {
 };
 
 /* ------------------------------------------------------------------ */
-/* Helpers                                                            */
+/* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 function isAudioAttachment(att) {
   return Boolean(att?.name && audioExtRe.test(att.name.trim()));
@@ -103,33 +103,28 @@ function isAudioAttachment(att) {
 console.log('🤖 Creating Discord client…');
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
 });
-
 
 console.log('✅ Discord client constructed');
 
 /* ------------------------------------------------------------------ */
-/* LOW-LEVEL DISCORD EVENT LOGGING                                     */
+/* Low-level Discord event logging                                      */
 /* ------------------------------------------------------------------ */
 client.on(Events.Debug, msg => console.log('🟣 DEBUG:', msg));
 client.on(Events.Warn, msg => console.warn('🟡 WARN:', msg));
 client.on(Events.Error, err => console.error('🔴 CLIENT ERROR:', err));
 
-client.on(Events.ShardDisconnect, (event, id) => {
-  console.error(`🔌 Shard ${id} disconnected`, event);
-});
-
-client.on(Events.ShardReconnecting, id => {
-  console.log(`🔁 Shard ${id} reconnecting`);
-});
-
-client.on(Events.ShardReady, id => {
-  console.log(`🧩 Shard ${id} ready`);
-});
+client.on(Events.ShardDisconnect, (event, id) => console.error(`🔌 Shard ${id} disconnected`, event));
+client.on(Events.ShardReconnecting, id => console.log(`🔁 Shard ${id} reconnecting`));
+client.on(Events.ShardReady, id => console.log(`🧩 Shard ${id} ready`));
 
 /* ------------------------------------------------------------------ */
-/* Core logic                                                          */
+/* Core logic                                                           */
 /* ------------------------------------------------------------------ */
 async function checkAndNotify() {
   console.log('⏰ Running checkAndNotify');
@@ -161,9 +156,18 @@ async function checkAndNotify() {
             .replace('{user}', member.toString())
             .replace('{duedate}', dueDateStr);
 
-          try { await member.send(msgText); } catch {}
+          try {
+            await member.send(msgText);
+          } catch (err) {
+            console.warn(`⚠️ Could not DM ${member.user.tag}:`, err.message);
+          }
+
           const channel = await client.channels.fetch(channelId).catch(() => null);
-          if (channel?.isTextBased?.()) await channel.send(msgText);
+          if (channel?.isTextBased?.() || channel?.isTextBased) {
+            await channel.send(msgText).catch(err => {
+              console.warn(`⚠️ Failed to send to channel ${channelId}:`, err.message);
+            });
+          }
 
           data.lastNotifiedThreshold = threshold;
           saveData();
@@ -178,7 +182,7 @@ async function checkAndNotify() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Commands                                                           */
+/* Commands                                                            */
 /* ------------------------------------------------------------------ */
 client.on('messageCreate', async message => {
   if (!message.guild || !message.content.startsWith('!')) return;
@@ -201,32 +205,36 @@ client.on('messageCreate', async message => {
 });
 
 /* ------------------------------------------------------------------ */
-/* Ready + scheduler                                                  */
+/* Ready + scheduler                                                   */
 /* ------------------------------------------------------------------ */
 client.once('ready', () => {
-  console.log(`✅ READY EVENT — Logged in as ${client.user.tag}`);
+  console.log(`✅ READY — Logged in as ${client.user.tag}`);
   console.log(`🏠 Connected to ${client.guilds.cache.size} guild(s)`);
 
   setTimeout(() => {
     console.log('⏱️ Initial checkAndNotify kick');
-    checkAndNotify();
-    setInterval(checkAndNotify, CHECK_INTERVAL_MINUTES * 60 * 1000);
+    checkAndNotify().catch(err => console.error('❌ Initial check failed:', err));
+
+    setInterval(async () => {
+      try {
+        await checkAndNotify();
+      } catch (err) {
+        console.error('❌ Interval check failed:', err);
+      }
+    }, CHECK_INTERVAL_MINUTES * 60 * 1000);
   }, 10_000);
 });
 
 /* ------------------------------------------------------------------ */
-/* LOGIN                                                              */
+/* LOGIN                                                               */
 /* ------------------------------------------------------------------ */
 console.log('🔐 About to call client.login()');
 
-
 client.login(process.env.BOT_TOKEN)
-  .then(() => console.log('🔑 client.login() promise RESOLVED'))
+  .then(() => console.log('🔑 client.login() resolved'))
   .catch(err => {
     console.error('❌ Discord login FAILED:', err);
     process.exit(1);
   });
 
-setTimeout(() => {
-  console.log('⏳ 15s after login call — process still alive');
-}, 15_000);
+setTimeout(() => console.log('⏳ 15s after login call — process still alive'), 15_000);
