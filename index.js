@@ -8,11 +8,17 @@ import http from 'http';
 dotenv.config();
 
 // --- Tiny HTTP server for Render ---
-const PORT = parseInt(process.env.PORT || '3000', 10);
+const PORT = parseInt(process.env.PORT, 10);
+if (!PORT) {
+  console.error('❌ PORT not provided by Render');
+  process.exit(1);
+}
+
 http.createServer((req, res) => {
   if (req.url === '/health') res.end('ok');
   else res.end('Discord bot running');
 }).listen(PORT, () => console.log(`HTTP server listening on port ${PORT}`));
+
 
 // --- Data persistence ---
 const DATA_FILE = './audioData.json';
@@ -253,4 +259,11 @@ if (!process.env.BOT_TOKEN) {
   console.error('❌ BOT_TOKEN missing in env!');
   process.exit(1);
 }
-client.login(process.env.BOT_TOKEN);
+
+client.login(process.env.BOT_TOKEN)
+  .then(() => console.log('✅ client.login() resolved'))
+  .catch(err => {
+    console.error('❌ Failed to login to Discord:', err);
+    process.exit(1);
+  });
+
