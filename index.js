@@ -1,7 +1,7 @@
 // audio_tracker_bot - Multi-stage Ping + DM + Dry Run Manual Check (JavaScript, ESM)
 // -----------------------------------------------------------------------------------
 
-import { Client, GatewayIntentBits } from 'discord.js';
+import { Client, GatewayIntentBits, Events } from 'discord.js';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import http from 'http';
@@ -11,12 +11,22 @@ dotenv.config();
 /* ------------------------------------------------------------------ */
 /* STARTUP SANITY LOG (DO NOT REMOVE – SAVES HOURS LATER)              */
 /* ------------------------------------------------------------------ */
-console.log('🚀 Booting bot with env:', {
-  BOT_TOKEN: process.env.BOT_TOKEN ? 'present' : 'missing',
+console.log('🚀 Boot sequence start');
+console.log('🔍 ENV CHECK:', {
+  BOT_TOKEN: process.env.BOT_TOKEN ? 'present' : '❌ MISSING',
   TARGET_DAYS: process.env.TARGET_DAYS,
   CHECK_INTERVAL_MINUTES: process.env.CHECK_INTERVAL_MINUTES,
   PORT: process.env.PORT,
+  NODE_VERSION: process.version,
 });
+
+/* ------------------------------------------------------------------ */
+/* HARD FAIL IF TOKEN MISSING                                          */
+/* ------------------------------------------------------------------ */
+if (!process.env.BOT_TOKEN) {
+  console.error('❌ BOT_TOKEN missing — aborting immediately');
+  process.exit(1);
+}
 
 /* ------------------------------------------------------------------ */
 /* Render-safe HTTP server                                             */
@@ -24,13 +34,8 @@ console.log('🚀 Booting bot with env:', {
 const PORT = Number(process.env.PORT) || 10000;
 
 http.createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200);
-    res.end('ok');
-  } else {
-    res.writeHead(200);
-    res.end('Discord bot running');
-  }
+  res.writeHead(200);
+  res.end(req.url === '/health' ? 'ok' : 'Discord bot running');
 }).listen(PORT, () => {
   console.log(`🌐 HTTP server listening on port ${PORT}`);
 });
@@ -41,26 +46,39 @@ http.createServer((req, res) => {
 const DATA_FILE = './audioData.json';
 let userAudioData = {};
 
-if (fs.existsSync(DATA_FILE)) {
-  try {
+try {
+  if (fs.existsSync(DATA_FILE)) {
     userAudioData = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8') || '{}');
-  } catch (err) {
-    console.error('⚠️ Failed to parse data file, starting fresh:', err);
-    userAudioData = {};
+    console.log('💾 Loaded audioData.json');
+  } else {
+    console.log('💾 No data file found, starting fresh');
   }
+} catch (err) {
+  console.error('⚠️ Failed to load data file, resetting:', err);
+  userAudioData = {};
 }
 
 function saveData() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(userAudioData, null, 2));
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(userAudioData, null, 2));
+  } catch (err) {
+    console.error('❌ Failed to save data:', err);
+  }
 }
 
 /* ------------------------------------------------------------------ */
-/* Config (defensive parsing)                                          */
+/* Config                                                             */
 /* ------------------------------------------------------------------ */
 const TARGET_DAYS = Number(process.env.TARGET_DAYS) || 30;
 const CHECK_INTERVAL_MINUTES = Number(process.env.CHECK_INTERVAL_MINUTES) || 60;
 const NOTIFY_THRESHOLDS = [7, 3, 1, 0];
 const audioExtRe = /\.(mp3|wav|m4a|flac|ogg|aac|opus)$/i;
+
+console.log('⚙️ Config loaded:', {
+  TARGET_DAYS,
+  CHECK_INTERVAL_MINUTES,
+  NOTIFY_THRESHOLDS,
+});
 
 /* ------------------------------------------------------------------ */
 /* Messages                                                           */
@@ -82,6 +100,8 @@ function isAudioAttachment(att) {
 /* ------------------------------------------------------------------ */
 /* Discord client                                                      */
 /* ------------------------------------------------------------------ */
+console.log('🤖 Creating Discord client…');
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -91,10 +111,33 @@ const client = new Client({
   ],
 });
 
+console.log('✅ Discord client constructed');
+
+/* ------------------------------------------------------------------ */
+/* LOW-LEVEL DISCORD EVENT LOGGING                                     */
+/* ------------------------------------------------------------------ */
+client.on(Events.Debug, msg => console.log('🟣 DEBUG:', msg));
+client.on(Events.Warn, msg => console.warn('🟡 WARN:', msg));
+client.on(Events.Error, err => console.error('🔴 CLIENT ERROR:', err));
+
+client.on(Events.ShardDisconnect, (event, id) => {
+  console.error(`🔌 Shard ${id} disconnected`, event);
+});
+
+client.on(Events.ShardReconnecting, id => {
+  console.log(`🔁 Shard ${id} reconnecting`);
+});
+
+client.on(Events.ShardReady, id => {
+  console.log(`🧩 Shard ${id} ready`);
+});
+
 /* ------------------------------------------------------------------ */
 /* Core logic                                                          */
 /* ------------------------------------------------------------------ */
 async function checkAndNotify() {
+  console.log('⏰ Running checkAndNotify');
+
   const now = Date.now();
 
   for (const [guildId, channels] of Object.entries(userAudioData)) {
@@ -105,6 +148,8 @@ async function checkAndNotify() {
 
         const threshold = [...NOTIFY_THRESHOLDS].reverse().find(t => daysLeft <= t);
         if (threshold === undefined || data.lastNotifiedThreshold === threshold) continue;
+
+        console.log(`📣 Trigger ${threshold}-day for user ${userId}`);
 
         try {
           const guild = await client.guilds.fetch(guildId).catch(() => null);
@@ -127,9 +172,9 @@ async function checkAndNotify() {
           data.lastNotifiedThreshold = threshold;
           saveData();
 
-          console.log(`📩 Notified ${member.user.tag} (${threshold}-day)`);
+          console.log(`📩 Notified ${member.user.tag}`);
         } catch (err) {
-          console.error('Notify error:', err);
+          console.error('❌ Notify error:', err);
         }
       }
     }
@@ -137,64 +182,19 @@ async function checkAndNotify() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Seeding                                                            */
-/* ------------------------------------------------------------------ */
-async function runSeedOnChannel(channel, maxFetch = 300) {
-  let lastId = null;
-  let totalFetched = 0;
-  const userLatest = new Map();
-
-  while (true) {
-    const opts = { limit: 100 };
-    if (lastId) opts.before = lastId;
-
-    const messages = await channel.messages.fetch(opts);
-    if (!messages.size) break;
-
-    totalFetched += messages.size;
-
-    for (const msg of messages.values()) {
-      if (msg.author.bot || !msg.attachments.size) continue;
-      if (![...msg.attachments.values()].some(isAudioAttachment)) continue;
-
-      const uid = msg.author.id;
-      if (!userLatest.has(uid) || msg.createdTimestamp > userLatest.get(uid)) {
-        userLatest.set(uid, msg.createdTimestamp);
-      }
-    }
-
-    lastId = messages.last()?.id;
-    if (totalFetched >= maxFetch) break;
-  }
-
-  const gid = channel.guild.id;
-  const cid = channel.id;
-  userAudioData[gid] ??= {};
-  userAudioData[gid][cid] ??= {};
-
-  for (const [uid, ts] of userLatest.entries()) {
-    userAudioData[gid][cid][uid] = {
-      lastAudio: ts,
-      lastNotifiedThreshold: userAudioData[gid][cid][uid]?.lastNotifiedThreshold ?? null,
-    };
-  }
-
-  saveData();
-  return { fetchedUsers: userLatest.size, totalFetched };
-}
-
-/* ------------------------------------------------------------------ */
 /* Commands                                                           */
 /* ------------------------------------------------------------------ */
-client.on('messageCreate', async (message) => {
+client.on('messageCreate', async message => {
   if (!message.guild || !message.content.startsWith('!')) return;
 
-  const [cmd, arg] = message.content.slice(1).split(/\s+/);
+  console.log(`💬 Command received: ${message.content}`);
+
+  const [cmd] = message.content.slice(1).split(/\s+/);
 
   if (cmd === 'check') {
     await message.channel.send('🔄 Updating recent audio posts...');
-    const result = await runSeedOnChannel(message.channel, 300);
-    await message.channel.send(`✅ Updated ${result.fetchedUsers} users from ${result.totalFetched} messages.`);
+    await checkAndNotify();
+    await message.channel.send('✅ Check complete.');
   }
 
   if (cmd === 'testping') {
@@ -208,25 +208,28 @@ client.on('messageCreate', async (message) => {
 /* Ready + scheduler                                                  */
 /* ------------------------------------------------------------------ */
 client.once('ready', () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`✅ READY EVENT — Logged in as ${client.user.tag}`);
+  console.log(`🏠 Connected to ${client.guilds.cache.size} guild(s)`);
 
   setTimeout(() => {
+    console.log('⏱️ Initial checkAndNotify kick');
     checkAndNotify();
     setInterval(checkAndNotify, CHECK_INTERVAL_MINUTES * 60 * 1000);
   }, 10_000);
 });
 
 /* ------------------------------------------------------------------ */
-/* Login                                                              */
+/* LOGIN                                                              */
 /* ------------------------------------------------------------------ */
-if (!process.env.BOT_TOKEN) {
-  console.error('❌ BOT_TOKEN missing — cannot start bot');
-  process.exit(1);
-}
+console.log('🔐 About to call client.login()');
 
 client.login(process.env.BOT_TOKEN)
-  .then(() => console.log('🔑 client.login() resolved'))
+  .then(() => console.log('🔑 client.login() promise RESOLVED'))
   .catch(err => {
-    console.error('❌ Discord login failed:', err);
+    console.error('❌ Discord login FAILED:', err);
     process.exit(1);
   });
+
+setTimeout(() => {
+  console.log('⏳ 15s after login call — process still alive');
+}, 15_000);
