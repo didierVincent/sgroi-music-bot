@@ -103,13 +103,9 @@ function isAudioAttachment(att) {
 console.log('🤖 Creating Discord client…');
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
-  ],
+  intents: [GatewayIntentBits.Guilds],
 });
+
 
 console.log('✅ Discord client constructed');
 
@@ -222,6 +218,7 @@ client.once('ready', () => {
 /* LOGIN                                                              */
 /* ------------------------------------------------------------------ */
 console.log('🔐 About to call client.login()');
+
 
 client.login(process.env.BOT_TOKEN)
   .then(() => console.log('🔑 client.login() promise RESOLVED'))
