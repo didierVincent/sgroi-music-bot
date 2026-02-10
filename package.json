@@ -1,11 +1,15 @@
 {
   "name": "audio-tracker-bot",
   "version": "1.0.0",
+  "private": true,
   "description": "A Discord bot that tracks when users last post audio and reminds inactive members.",
-  "main": "index.js",
   "type": "module",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20 <22"
   },
   "dependencies": {
     "discord.js": "^14.22.1",

@@ -7,14 +7,39 @@ import dotenv from 'dotenv';
 import http from 'http';
 dotenv.config();
 
-// --- Tiny HTTP server for Render ---
+/* ------------------------------------------------------------------ */
+/* 🚂 Railway / Runtime Diagnostics (ADD-ONLY)                         */
+/* ------------------------------------------------------------------ */
+console.log('🚀 Starting audio_tracker_bot...');
+console.log('🧠 Node version:', process.version);
+console.log('🌍 Environment:', process.env.NODE_ENV || 'undefined');
+console.log('🚂 Railway environment:', process.env.RAILWAY_ENVIRONMENT || 'not detected');
+
+if (!process.env.BOT_TOKEN) {
+  console.error('❌ BOT_TOKEN is missing! Bot will fail to log in.');
+}
+
+if (!process.env.TRACK_CHANNELS) {
+  console.warn('⚠️ TRACK_CHANNELS not set — bot will ignore all channels.');
+}
+
+/* ------------------------------------------------------------------ */
+/* 🌐 Tiny HTTP server (Railway-compatible)                            */
+/* ------------------------------------------------------------------ */
 const PORT = parseInt(process.env.PORT || '3000', 10);
 http.createServer((req, res) => {
-  if (req.url === '/health') res.end('ok');
-  else res.end('Discord bot running');
-}).listen(PORT, () => console.log(`HTTP server listening on port ${PORT}`));
+  if (req.url === '/health') {
+    res.end('ok');
+  } else {
+    res.end('Discord bot running');
+  }
+}).listen(PORT, () =>
+  console.log(`🌐 HTTP server listening on port ${PORT}`)
+);
 
-// --- Discord client setup ---
+/* ------------------------------------------------------------------ */
+/* 🤖 Discord client setup                                             */
+/* ------------------------------------------------------------------ */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -23,7 +48,9 @@ const client = new Client({
   ],
 });
 
-// --- Data persistence ---
+/* ------------------------------------------------------------------ */
+/* 💾 Data persistence                                                 */
+/* ------------------------------------------------------------------ */
 const DATA_FILE = './audioData.json';
 let userAudioData = {};
 if (fs.existsSync(DATA_FILE)) {
@@ -38,13 +65,17 @@ function saveData() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(userAudioData, null, 2));
 }
 
-// --- Config ---
+/* ------------------------------------------------------------------ */
+/* ⚙️ Config                                                           */
+/* ------------------------------------------------------------------ */
 const TARGET_DAYS = parseInt(process.env.TARGET_DAYS || '30', 10);
 const NOTIFY_THRESHOLDS = [7, 3, 1, 0];
 const CHECK_INTERVAL_MINUTES = parseInt(process.env.CHECK_INTERVAL_MINUTES || '60', 10);
 const audioExtRe = /\.(mp3|wav|m4a|flac|ogg|aac|opus)$/i;
 
-// --- Messages per threshold ---
+/* ------------------------------------------------------------------ */
+/* 💬 Messages per threshold                                           */
+/* ------------------------------------------------------------------ */
 const MESSAGES = {
   7: process.env.NOTIFY_7DAYS || "{user} you have 7 days or less left to post a track! 💣 {duedate}",
   3: process.env.NOTIFY_3DAYS || "{user}! ⚠️ Few days left! Post music! 🥺 {duedate}",
@@ -52,12 +83,16 @@ const MESSAGES = {
   0: process.env.NOTIFY_OVERDUE || "🚨🚨🚨 {user}!!!!! It's been over a month of no music! 😳😳😳",
 };
 
-// --- Helpers ---
+/* ------------------------------------------------------------------ */
+/* 🛠 Helpers                                                          */
+/* ------------------------------------------------------------------ */
 function isAudioAttachment(att) {
   return att.name && audioExtRe.test(att.name.trim());
 }
 
-// --- Audio detection on new messages ---
+/* ------------------------------------------------------------------ */
+/* 🎵 Audio detection on new messages                                  */
+/* ------------------------------------------------------------------ */
 client.on('messageCreate', (message) => {
   if (message.author.bot || !message.guild) return;
 
@@ -81,8 +116,11 @@ client.on('messageCreate', (message) => {
   console.log(`🎵 Recorded audio for ${message.author.tag} in ${message.guild.name} / ${message.channel.name}`);
 });
 
-// --- Multi-stage notification system ---
+/* ------------------------------------------------------------------ */
+/* 🔔 Multi-stage notification system                                  */
+/* ------------------------------------------------------------------ */
 async function checkAndNotify() {
+  console.log(`⏱️ Running checkAndNotify @ ${new Date().toISOString()}`);
   const now = Date.now();
 
   for (const [guildId, channels] of Object.entries(userAudioData)) {
@@ -126,119 +164,112 @@ async function checkAndNotify() {
   }
 }
 
-// --- Commands ---
+/* ------------------------------------------------------------------ */
+/* 💬 Commands                                                         */
+/* ------------------------------------------------------------------ */
 client.on('messageCreate', async (message) => {
   if (!message.guild || !message.content.startsWith('!')) return;
   const args = message.content.slice(1).split(/\s+/);
   const cmd = args[0].toLowerCase();
 
   async function runSeedOnChannel(channel, maxFetch = 300) {
-  let lastId = null;
-  let totalFetched = 0;
-  const userLatest = new Map();
+    let lastId = null;
+    let totalFetched = 0;
+    const userLatest = new Map();
 
-  while (true) {
-    const opts = { limit: 100 };
-    if (lastId) opts.before = lastId;
+    while (true) {
+      const opts = { limit: 100 };
+      if (lastId) opts.before = lastId;
 
-    const messages = await channel.messages.fetch(opts);
-    if (!messages.size) break;
+      const messages = await channel.messages.fetch(opts);
+      if (!messages.size) break;
 
-    totalFetched += messages.size;
+      totalFetched += messages.size;
 
-    for (const [, msg] of messages) {
-      if (msg.author.bot || !msg.attachments.size) continue;
-      const hasAudio = [...msg.attachments.values()].some(isAudioAttachment);
-      if (!hasAudio) continue;
+      for (const [, msg] of messages) {
+        if (msg.author.bot || !msg.attachments.size) continue;
+        const hasAudio = [...msg.attachments.values()].some(isAudioAttachment);
+        if (!hasAudio) continue;
 
-      const uid = msg.author.id;
-      if (!userLatest.has(uid) || msg.createdTimestamp > userLatest.get(uid).created) {
-        userLatest.set(uid, { created: msg.createdTimestamp });
+        const uid = msg.author.id;
+        if (!userLatest.has(uid) || msg.createdTimestamp > userLatest.get(uid).created) {
+          userLatest.set(uid, { created: msg.createdTimestamp });
+        }
+      }
+
+      lastId = messages.last().id;
+      if (totalFetched >= maxFetch) break;
+    }
+
+    const gid = channel.guild.id;
+    const cid = channel.id;
+    userAudioData[gid] ??= {};
+    userAudioData[gid][cid] ??= {};
+
+    for (const [uid, info] of userLatest.entries()) {
+      userAudioData[gid][cid][uid] = {
+        lastAudio: info.created,
+        lastNotifiedThreshold: userAudioData[gid][cid][uid]?.lastNotifiedThreshold ?? null,
+      };
+    }
+
+    saveData();
+    return { fetchedUsers: userLatest.size, totalFetched };
+  }
+
+  /* ------------------------------ !check ------------------------------ */
+  if (cmd === 'check') {
+    await message.channel.send("🔄 Updating recent audio posts...");
+    const result = await runSeedOnChannel(message.channel, 300);
+    await message.channel.send(`✅ Updated ${result.fetchedUsers} users from ${result.totalFetched} messages.`);
+
+    const now = Date.now();
+    const rows = [];
+
+    for (const [guildId, channels] of Object.entries(userAudioData)) {
+      const guild = await client.guilds.fetch(guildId).catch(() => null);
+      if (!guild) continue;
+
+      for (const [channelId, users] of Object.entries(channels)) {
+        for (const [userId, data] of Object.entries(users)) {
+          const member = await guild.members.fetch(userId).catch(() => null);
+          if (!member) continue;
+
+          const daysLeft = Math.round(
+            TARGET_DAYS - (now - (data.lastAudio || 0)) / 86400000
+          );
+
+          const dueDateStr = new Date(
+            data.lastAudio + TARGET_DAYS * 86400000
+          ).toLocaleDateString('en-AU', {
+            weekday: 'short',
+            day: 'numeric',
+            month: 'short',
+          });
+
+          rows.push({
+            name: member.nickname || member.user.username,
+            daysLeft,
+            dueDateStr,
+          });
+        }
       }
     }
 
-    lastId = messages.last().id;
-    if (totalFetched >= maxFetch) break;
-  }
+    rows.sort((a, b) => b.daysLeft - a.daysLeft);
 
-  // Write results
-  const gid = channel.guild.id;
-  const cid = channel.id;
-  userAudioData[gid] ??= {};
-  userAudioData[gid][cid] ??= {};
+    let output = '🚨 Days left for the gang 🚨\n';
+    for (const r of rows) {
+      output += `${r.name}: ${r.daysLeft} days left (due ${r.dueDateStr})\n`;
+    }
 
-  for (const [uid, info] of userLatest.entries()) {
-    userAudioData[gid][cid][uid] = {
-      lastAudio: info.created,
-      lastNotifiedThreshold: userAudioData[gid][cid][uid]?.lastNotifiedThreshold ?? null,
-    };
-  }
-
-  saveData();
-  return { fetchedUsers: userLatest.size, totalFetched };
-}
-
-
-  // --- !check ---
-  // --- !check ---
-if (cmd === 'check') {
-  // 1. AUTO-SEED this channel before checking
-  await message.channel.send("🔄 Updating recent audio posts...");
-  const result = await runSeedOnChannel(message.channel, 300);
-  await message.channel.send(`✅ Updated ${result.fetchedUsers} users from ${result.totalFetched} messages.`);
-
-  const now = Date.now();
-  const rows = [];
-
-  // Collect rows first
-  for (const [guildId, channels] of Object.entries(userAudioData)) {
-    const guild = await client.guilds.fetch(guildId).catch(() => null);
-    if (!guild) continue;
-
-    for (const [channelId, users] of Object.entries(channels)) {
-      for (const [userId, data] of Object.entries(users)) {
-        const member = await guild.members.fetch(userId).catch(() => null);
-        if (!member) continue;
-
-        const daysLeft = Math.round(
-          TARGET_DAYS - (now - (data.lastAudio || 0)) / 86400000
-        );
-
-        const dueDateStr = new Date(
-          data.lastAudio + TARGET_DAYS * 86400000
-        ).toLocaleDateString('en-AU', {
-          weekday: 'short',
-          day: 'numeric',
-          month: 'short',
-        });
-
-        rows.push({
-          name: member.nickname || member.user.username,
-          daysLeft,
-          dueDateStr,
-        });
-      }
+    for (const chunk of output.match(/[\s\S]{1,2000}/g) || []) {
+      await message.channel.send('```' + chunk + '```');
     }
   }
 
-  // 🔽 SORT: most days left → least days left
-  rows.sort((a, b) => b.daysLeft - a.daysLeft);
-
-  let output = '🚨 Days left for the gang 🚨\n';
-  for (const r of rows) {
-    output += `${r.name}: ${r.daysLeft} days left (due ${r.dueDateStr})\n`;
-  }
-
-  for (const chunk of output.match(/[\s\S]{1,2000}/g) || []) {
-    await message.channel.send('```' + chunk + '```');
-  }
-}
-
-
-
-  // --- Everyone can now use: seed, export, resetdata, testping ---
+  /* --------------------- seed / export / reset / test --------------------- */
   if (['seed', 'export', 'resetdata', 'testping'].includes(cmd)) {
-    // --- !export ---
     if (cmd === 'export') {
       try {
         await message.reply({ files: [{ attachment: DATA_FILE, name: 'audioData.json' }] });
@@ -247,17 +278,13 @@ if (cmd === 'check') {
       }
     }
 
-    // --- !seed ---
     if (cmd === 'seed') {
-  const maxFetch = parseInt(args[1] || '2000', 10);
-  message.reply(`🔍 Seeding up to ${maxFetch} messages...`);
+      const maxFetch = parseInt(args[1] || '2000', 10);
+      message.reply(`🔍 Seeding up to ${maxFetch} messages...`);
+      const result = await runSeedOnChannel(message.channel, maxFetch);
+      message.reply(`✅ Seeded ${result.fetchedUsers} users from ${result.totalFetched} messages.`);
+    }
 
-  const result = await runSeedOnChannel(message.channel, maxFetch);
-
-  message.reply(`✅ Seeded ${result.fetchedUsers} users from ${result.totalFetched} messages.`);
-}
-
-    // --- !resetdata ---
     if (cmd === 'resetdata') {
       userAudioData = {};
       saveData();
@@ -265,7 +292,6 @@ if (cmd === 'check') {
       console.log('🔄 Audio data reset.');
     }
 
-    // --- 🧪 !testping ---
     if (cmd === 'testping') {
       await message.channel.send('🧪 Running test notification simulation...');
       const now = Date.now();
@@ -315,7 +341,9 @@ if (cmd === 'check') {
   }
 });
 
-// --- Ready + interval ---
+/* ------------------------------------------------------------------ */
+/* ✅ Ready + interval                                                 */
+/* ------------------------------------------------------------------ */
 client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   setTimeout(() => {
@@ -324,5 +352,18 @@ client.once('ready', () => {
   }, 10000);
 });
 
-// --- Start bot ---
+/* ------------------------------------------------------------------ */
+/* 🛑 Process-level safety nets (Railway best practice)                */
+/* ------------------------------------------------------------------ */
+process.on('unhandledRejection', (reason) => {
+  console.error('💥 Unhandled Promise Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('🔥 Uncaught Exception:', err);
+});
+
+/* ------------------------------------------------------------------ */
+/* ▶️ Start bot                                                        */
+/* ------------------------------------------------------------------ */
 client.login(process.env.BOT_TOKEN);
